@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scene Playground — Parallax Editor</title>
+<style>
+  :root {
+    --bg: #0a0a1a;
+    --surface: #111128;
+    --surface2: #1a1a3e;
+    --text: #c8c8e0;
+    --text-muted: #7878a0;
+    --accent: #6a4c93;
+    --accent2: #1b998b;
+    --link: #4da8da;
+    --border: #252548;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 1rem;
+  }
+  h1 { font-size: 1.4rem; font-weight: 700; color: #d8d8f0; margin-bottom: 0.3rem; }
+  .subtitle { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem; }
+
+  nav {
+    padding: 0.6rem 1rem;
+    background: var(--surface);
+    border-radius: 6px;
+    font-size: 0.85rem;
+    margin-bottom: 1rem;
+  }
+  nav a { color: var(--link); text-decoration: none; }
+
+  /* Scene viewport */
+  #viewport {
+    position: relative;
+    width: 50%;
+    aspect-ratio: 3/2;
+    overflow: hidden;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #050510;
+    margin-bottom: 0.5rem;
+    transition: width 0.3s ease;
+  }
+  #viewport.fullwidth {
+    width: 100%;
+  }
+  #viewport img, #viewport div.css-layer {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    image-rendering: pixelated;
+    pointer-events: none;
+  }
+
+  /* Controls */
+  .controls {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+  .layer-row {
+    background: var(--surface);
+    border-radius: 4px;
+    padding: 0.3rem 0.6rem;
+    border-left: 3px solid var(--border);
+    font-size: 0.75rem;
+  }
+  .layer-row.active { border-left-color: var(--accent2); }
+  .layer-header {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    cursor: pointer;
+    user-select: none;
+  }
+  .layer-header input[type="checkbox"] { margin: 0; }
+  .layer-header .name {
+    font-weight: 600;
+    color: #d8d8f0;
+    flex: 1;
+  }
+  .layer-header .toggle-arrow {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+  }
+  .layer-sliders {
+    display: none;
+    grid-template-columns: 35px 1fr 30px;
+    gap: 0.15rem 0.4rem;
+    align-items: center;
+    padding-top: 0.3rem;
+  }
+  .layer-sliders.open { display: grid; }
+  label { color: var(--text-muted); white-space: nowrap; font-size: 0.7rem; }
+  input[type="range"] {
+    width: 100%;
+    accent-color: var(--accent2);
+    height: 3px;
+  }
+  .val {
+    font-family: monospace;
+    font-size: 0.65rem;
+    color: var(--accent2);
+    text-align: right;
+  }
+
+  /* Transport */
+  .transport {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    align-items: center;
+  }
+  .transport button {
+    font-family: sans-serif;
+    font-size: 0.85rem;
+    padding: 0.4em 1em;
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .transport button:hover { border-color: var(--accent2); }
+  .transport button.active { background: var(--accent2); color: #fff; border-color: var(--accent2); }
+</style>
+</head>
+<body>
+
+<h1>Scene Playground</h1>
+<p class="subtitle">Parallax layer editor. Toggle layers, adjust position/scale/velocity, animate.</p>
+
+<nav>
+  <a href="intro.html">Intro</a> · <a href="lighthouse.html">Sprites</a> · <a href="scene.html">Scene</a> · <strong style="color:#d8d8f0">Playground</strong> · <a href="../../index.html">All docs</a>
+</nav>
+
+<div id="viewport"></div>
+
+<div style="margin-bottom:0.5rem">
+  <button onclick="document.getElementById('viewport').classList.toggle('fullwidth')" style="font-family:sans-serif;font-size:0.75rem;padding:0.3em 0.8em;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;cursor:pointer">Toggle fullscreen</button>
+</div>
+
+<div class="transport">
+  <button id="btn-play" onclick="togglePlay()">Play</button>
+  <button onclick="resetPositions()">Reset pos</button>
+  <button onclick="resetAll()">Reset all</button>
+  <button onclick="saveState()">Save</button>
+  <span class="val" id="save-status" style="opacity:0;transition:opacity 0.3s"></span>
+  <label style="font-size:0.8rem;color:var(--text-muted)">Speed</label>
+  <input type="range" id="global-speed" min="0" max="200" value="100" style="width:100px" oninput="updateGlobalSpeed(this.value)">
+  <span class="val" id="global-speed-val">1.0x</span>
+</div>
+
+<div class="controls" id="layer-controls"></div>
+
+<script>
+const DEFAULT_LAYERS = [
+  { id: 'sky-gradient', name: 'Sky gradient', type: 'css',
+    css: 'background:linear-gradient(to bottom, #050510, #111138)',
+    y: 0, h: 50, x: 0, w: 100, speed: 0, depth: 0, on: true },
+  { id: 'ocean-color', name: 'Ocean color', type: 'css',
+    css: 'background:#0a0a1a',
+    y: 50, h: 50, x: 0, w: 100, speed: 0, depth: 1, on: true },
+  { id: 'clouds-far', name: 'Clouds — far', type: 'img',
+    src: 'results/layer-clouds-far.png',
+    y: 0, h: 50, x: 0, w: 100, speed: 5, depth: 2, on: true, blend: 'lighten' },
+  { id: 'clouds-mid', name: 'Clouds — mid', type: 'img',
+    src: 'results/layer-clouds-mid.png',
+    y: 0, h: 50, x: 0, w: 100, speed: 10, depth: 3, on: true, blend: 'lighten' },
+  { id: 'eye-sprite', name: 'Eye cloud sprite', type: 'img',
+    src: 'results/eye-v4-ours.png',
+    y: 10, h: 10, x: 25, w: 12, speed: 8, depth: 4, on: true, blend: 'normal' },
+  { id: 'ocean-texture', name: 'Ocean texture', type: 'img',
+    src: 'results/layer-ocean.png',
+    y: 30, h: 50, x: 0, w: 100, speed: 15, depth: 5, on: true, blend: 'lighten' },
+  { id: 'sea-rocks', name: 'Sea rocks', type: 'img',
+    src: 'results/layer-rocks.png',
+    y: 40, h: 40, x: 0, w: 100, speed: 12, depth: 6, on: true, blend: 'lighten' },
+  { id: 'cliff', name: 'Cliff', type: 'img',
+    src: 'results/cliff-standalone-v4.png',
+    y: 50, h: 50, x: 50, w: 50, speed: 0, depth: 7, on: true, blend: 'lighten' },
+  { id: 'lighthouse', name: 'Lighthouse sprite', type: 'img',
+    src: 'results/lighthouse-side.png',
+    y: 38, h: 12, x: 72, w: 6, speed: 0, depth: 8, on: true, blend: 'normal' },
+];
+
+let LAYERS = JSON.parse(JSON.stringify(DEFAULT_LAYERS));
+let playing = false;
+let animFrame = null;
+let globalSpeed = 1.0;
+let offsets = {};
+let selectedLayer = -1;
+let dragSrc = null;
+
+const SAVE_FILE = 'scene-tuning.json';
+const UPLOAD_BASE = '/api/uploads';
+
+function initOffsets() {
+  LAYERS.forEach(l => { offsets[l.id] = 0; });
+}
+initOffsets();
+
+// --- Persistence: save/load tuning to server ---
+
+function getLayerState() {
+  return LAYERS.map(l => {
+    const o = { id: l.id, y: l.y, h: l.h, x: l.x, w: l.w, speed: l.speed, depth: l.depth, on: l.on };
+    if (l.blend) o.blend = l.blend;
+    return o;
+  });
+}
+
+function applyLayerState(saved) {
+  saved.forEach(s => {
+    const l = LAYERS.find(x => x.id === s.id);
+    if (!l) return;
+    ['y','h','x','w','speed','depth','on','blend'].forEach(k => {
+      if (s[k] !== undefined) l[k] = s[k];
+    });
+  });
+  // Reorder LAYERS to match saved order
+  const order = saved.map(s => s.id);
+  LAYERS.sort((a, b) => {
+    const ai = order.indexOf(a.id), bi = order.indexOf(b.id);
+    if (ai === -1 && bi === -1) return 0;
+    if (ai === -1) return 1;
+    if (bi === -1) return -1;
+    return ai - bi;
+  });
+}
+
+async function saveState() {
+  const state = JSON.stringify({ layers: getLayerState(), savedAt: new Date().toISOString() }, null, 2);
+  try {
+    const res = await fetch(UPLOAD_BASE + '?dest=game-results&filename=' + SAVE_FILE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: state,
+    });
+    if (res.ok) {
+      console.log('[playground] state saved to server');
+      showSaveStatus('Saved');
+    } else {
+      console.warn('[playground] save failed:', res.status);
+      showSaveStatus('Save failed');
+    }
+  } catch (e) {
+    console.warn('[playground] save error:', e);
+    showSaveStatus('Save error');
+  }
+}
+
+async function loadState() {
+  try {
+    const res = await fetch(UPLOAD_BASE + '/' + SAVE_FILE + '?dest=game-results');
+    if (!res.ok) { console.log('[playground] no saved state'); return; }
+    const data = await res.json();
+    if (data.layers) {
+      applyLayerState(data.layers);
+      console.log('[playground] state loaded from server, saved at', data.savedAt);
+    }
+  } catch (e) {
+    console.log('[playground] no saved state or parse error:', e);
+  }
+}
+
+function showSaveStatus(msg) {
+  const el = document.getElementById('save-status');
+  el.textContent = msg;
+  el.style.opacity = '1';
+  setTimeout(() => { el.style.opacity = '0'; }, 1500);
+}
+
+// --- Rendering ---
+
+function renderViewport() {
+  const vp = document.getElementById('viewport');
+  vp.innerHTML = '';
+  const sorted = [...LAYERS].sort((a, b) => a.depth - b.depth);
+  sorted.forEach(l => {
+    if (!l.on) return;
+    if (l.type === 'css') {
+      const div = document.createElement('div');
+      div.className = 'css-layer';
+      div.style.cssText = l.css + ';position:absolute;top:' + l.y + '%;left:' + (l.x + (offsets[l.id] || 0)) + '%;width:' + l.w + '%;height:' + l.h + '%;';
+      vp.appendChild(div);
+    } else {
+      const img = document.createElement('img');
+      img.src = l.src;
+      img.style.cssText = 'position:absolute;top:' + l.y + '%;left:' + (l.x + (offsets[l.id] || 0)) + '%;width:' + l.w + '%;height:' + l.h + '%;object-fit:cover;image-rendering:pixelated;'
+        + (l.blend ? 'mix-blend-mode:' + l.blend + ';' : '');
+      vp.appendChild(img);
+    }
+  });
+}
+
+function renderControls() {
+  const container = document.getElementById('layer-controls');
+  container.innerHTML = '';
+  LAYERS.forEach((l, i) => {
+    const isOpen = (i === selectedLayer);
+    const row = document.createElement('div');
+    row.className = 'layer-row' + (l.on ? ' active' : '');
+    row.draggable = true;
+    row.dataset.index = i;
+
+    row.innerHTML = `
+      <div class="layer-header" onclick="selectLayer(${i})">
+        <input type="checkbox" ${l.on ? 'checked' : ''} onclick="event.stopPropagation()" onchange="toggleLayer(${i}, this.checked)">
+        <span class="name">${l.name}</span>
+        <span class="toggle-arrow">${isOpen ? '▾' : '▸'}</span>
+      </div>
+      <div class="layer-sliders ${isOpen ? 'open' : ''}">
+        <label>Y</label>
+        <input type="range" min="-50" max="100" value="${l.y}" oninput="setLayerProp(${i}, 'y', +this.value)">
+        <span class="val" id="val-y-${i}">${l.y}%</span>
+
+        <label>X</label>
+        <input type="range" min="-100" max="100" value="${l.x}" oninput="setLayerProp(${i}, 'x', +this.value)">
+        <span class="val" id="val-x-${i}">${l.x}%</span>
+
+        <label>W</label>
+        <input type="range" min="5" max="200" value="${l.w}" oninput="setLayerProp(${i}, 'w', +this.value)">
+        <span class="val" id="val-w-${i}">${l.w}%</span>
+
+        <label>H</label>
+        <input type="range" min="5" max="200" value="${l.h}" oninput="setLayerProp(${i}, 'h', +this.value)">
+        <span class="val" id="val-h-${i}">${l.h}%</span>
+
+        <label>Spd</label>
+        <input type="range" min="0" max="50" value="${l.speed}" oninput="setLayerProp(${i}, 'speed', +this.value)">
+        <span class="val" id="val-speed-${i}">${l.speed}</span>
+
+        <label>Z</label>
+        <input type="range" min="0" max="10" value="${l.depth}" oninput="setLayerProp(${i}, 'depth', +this.value)">
+        <span class="val" id="val-depth-${i}">${l.depth}</span>
+      </div>
+    `;
+
+    // Drag-and-drop reordering
+    row.addEventListener('dragstart', e => {
+      dragSrc = i;
+      e.dataTransfer.effectAllowed = 'move';
+      row.style.opacity = '0.4';
+    });
+    row.addEventListener('dragend', () => { row.style.opacity = '1'; });
+    row.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+    row.addEventListener('drop', e => {
+      e.preventDefault();
+      if (dragSrc === null || dragSrc === i) return;
+      const moved = LAYERS.splice(dragSrc, 1)[0];
+      LAYERS.splice(i, 0, moved);
+      if (selectedLayer === dragSrc) selectedLayer = i;
+      else if (selectedLayer > dragSrc && selectedLayer <= i) selectedLayer--;
+      else if (selectedLayer < dragSrc && selectedLayer >= i) selectedLayer++;
+      dragSrc = null;
+      renderControls();
+      renderViewport();
+    });
+
+    container.appendChild(row);
+  });
+}
+
+function selectLayer(i) {
+  selectedLayer = (selectedLayer === i) ? -1 : i;
+  renderControls();
+}
+
+function toggleLayer(i, on) {
+  LAYERS[i].on = on;
+  renderViewport();
+  renderControls();
+}
+
+function setLayerProp(i, prop, val) {
+  LAYERS[i][prop] = val;
+  const el = document.getElementById('val-' + prop + '-' + i);
+  if (el) el.textContent = (prop === 'speed' || prop === 'depth') ? val : val + '%';
+  renderViewport();
+}
+
+function updateGlobalSpeed(val) {
+  globalSpeed = val / 100;
+  document.getElementById('global-speed-val').textContent = globalSpeed.toFixed(1) + 'x';
+}
+
+function togglePlay() {
+  playing = !playing;
+  document.getElementById('btn-play').textContent = playing ? 'Pause' : 'Play';
+  document.getElementById('btn-play').classList.toggle('active', playing);
+  if (playing) animate();
+  else if (animFrame) cancelAnimationFrame(animFrame);
+}
+
+function resetPositions() {
+  initOffsets();
+  renderViewport();
+}
+
+function resetAll() {
+  LAYERS = JSON.parse(JSON.stringify(DEFAULT_LAYERS));
+  selectedLayer = -1;
+  initOffsets();
+  renderControls();
+  renderViewport();
+}
+
+let lastTime = 0;
+function animate(ts) {
+  if (!playing) return;
+  if (!lastTime) lastTime = ts;
+  const dt = (ts - lastTime) / 1000;
+  lastTime = ts;
+
+  LAYERS.forEach(l => {
+    if (l.speed > 0 && l.on) {
+      offsets[l.id] = (offsets[l.id] || 0) - l.speed * globalSpeed * dt;
+    }
+  });
+
+  renderViewport();
+  animFrame = requestAnimationFrame(animate);
+}
+
+// Init — load saved state, then render
+loadState().then(() => {
+  renderControls();
+  renderViewport();
+  console.log('[playground] loaded', LAYERS.length, 'layers');
+});
+</script>
+
+</body>
+</html>
