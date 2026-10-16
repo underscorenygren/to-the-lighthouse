@@ -36,11 +36,16 @@
   }
   nav a { color: var(--link); text-decoration: none; }
 
-  /* Layout: two panes */
+  /* Layout: two panes, stacks on mobile */
   .editor {
     display: flex;
     gap: 1rem;
     margin-bottom: 1rem;
+  }
+  @media (max-width: 600px) {
+    .editor { flex-direction: column; }
+    .tile-list { width: 100% !important; flex-direction: row; flex-wrap: wrap; }
+    .tile-item { flex: 0 0 auto; }
   }
 
   /* Tile list — left pane */
@@ -245,7 +250,7 @@ let offsets = {};
 let selectedLayer = -1; // -1 = show all
 
 const SAVE_FILE = 'scene-tuning.json';
-const UPLOAD_BASE = '/api/uploads';
+const UPLOAD_BASE = '/admin/api/uploads';
 
 function initOffsets() {
   LAYERS.forEach(l => { offsets[l.id] = 0; });
