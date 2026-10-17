@@ -95,10 +95,13 @@
     cursor: default;
   }
   #viewport.dragging { cursor: grabbing; }
-  #viewport img, #viewport div.css-layer {
+  #viewport img, #viewport div.css-layer, #viewport div.sprite-layer {
     position: absolute;
     image-rendering: pixelated;
     pointer-events: none;
+  }
+  .sprite-layer {
+    overflow: hidden;
   }
   /* Selection outline in viewport */
   .vp-selection {
@@ -218,25 +221,32 @@ const DEFAULT_LAYERS = [
     y: 50, h: 50, x: 0, w: 100, speed: 0, depth: 1, on: true },
   { id: 'clouds-far', name: 'Clouds far', type: 'img',
     src: 'results/layer-clouds-far.png',
-    y: 0, h: 50, x: 0, w: 100, speed: 5, depth: 2, on: true, blend: 'lighten' },
+    y: 0, h: 50, x: 0, w: 100, speed: 5, depth: 2, on: true, blend: 'lighten',
+    tile: true, tileSize: 30 },
   { id: 'clouds-mid', name: 'Clouds mid', type: 'img',
-    src: 'results/layer-clouds-mid.png',
-    y: 0, h: 50, x: 0, w: 100, speed: 10, depth: 3, on: true, blend: 'lighten' },
-  { id: 'clouds-near', name: 'Clouds near', type: 'img',
+    src: 'results/layer-clouds-mid-v3.png',
+    y: 5, h: 40, x: 0, w: 100, speed: 10, depth: 3, on: true, blend: 'normal',
+    tile: true, tileSize: 15 },
+  { id: 'clouds-storm', name: 'Stormhead', type: 'img',
     src: 'results/layer-clouds-near.png',
-    y: 5, h: 30, x: 10, w: 40, speed: 15, depth: 4, on: true, blend: 'normal' },
-  { id: 'eye-sprite', name: 'Eye cloud', type: 'img',
-    src: 'results/eye-v4-ours.png',
+    y: 0, h: 50, x: 0, w: 100, speed: 2, depth: 2, on: true, blend: 'normal',
+    tile: true, tileSize: 40 },
+  { id: 'eye-sprite', name: 'Eye cloud', type: 'sprite',
+    sheets: ['results/eye-look.png', 'results/eye-anim.png'],
+    frameW: 101, frameH: 64, frames: 16,
+    // Sequence: look(0-15), blink(0-15), look(15-0) = 48 frames total
+    sequence: 'look-blink-look-reverse',
+    fps: 6,
     y: 10, h: 10, x: 25, w: 12, speed: 8, depth: 5, on: true, blend: 'normal' },
   { id: 'ocean-texture', name: 'Ocean texture', type: 'img',
     src: 'results/layer-ocean.png',
     y: 50, h: 30, x: 0, w: 100, speed: 15, depth: 6, on: true, blend: 'lighten' },
   { id: 'sea-rocks', name: 'Sea rocks', type: 'img',
-    src: 'results/layer-rocks.png',
-    y: 60, h: 20, x: 0, w: 60, speed: 12, depth: 7, on: true, blend: 'lighten' },
+    src: 'results/layer-rocks-v3.png',
+    y: 60, h: 20, x: 0, w: 60, speed: 12, depth: 7, on: true, blend: 'normal' },
   { id: 'cliff', name: 'Cliff', type: 'img',
     src: 'results/cliff-standalone-v4.png',
-    y: 50, h: 50, x: 50, w: 50, speed: 0, depth: 8, on: true, blend: 'lighten' },
+    y: 50, h: 50, x: 50, w: 50, speed: 0, depth: 8, on: true, blend: 'normal' },
   { id: 'lighthouse', name: 'Lighthouse', type: 'img',
     src: 'results/lighthouse-side.png',
     y: 38, h: 12, x: 72, w: 6, speed: 0, depth: 9, on: true, blend: 'normal' },
@@ -378,11 +388,111 @@ function renderTileList() {
   });
 }
 
+// --- Sprite animation ---
+
+let spriteFrameIndex = {}; // per-layer current frame
+let spriteTimer = null;
+
+function buildSequence(l) {
+  // look(0-15) → blink(0-15) → look(15-0)
+  const n = l.frames;
+  const seq = [];
+  for (let i = 0; i < n; i++) seq.push({ sheet: 0, frame: i }); // look forward
+  for (let i = 0; i < n; i++) seq.push({ sheet: 1, frame: i }); // blink
+  for (let i = n - 1; i >= 0; i--) seq.push({ sheet: 0, frame: i }); // look reverse
+  return seq;
+}
+
+function getSpriteFrame(l) {
+  const idx = spriteFrameIndex[l.id] || 0;
+  const seq = buildSequence(l);
+  const entry = seq[idx % seq.length];
+  // Offset as percentage of total sheet width (frames * frameW)
+  const totalW = l.frames * l.frameW;
+  const pct = (entry.frame * l.frameW / totalW) * 100;
+  return {
+    sheet: l.sheets[entry.sheet],
+    offsetPct: pct,
+    frames: l.frames,
+  };
+}
+
+function advanceSpriteFrames() {
+  let hasSprites = false;
+  LAYERS.forEach(l => {
+    if (l.type !== 'sprite' || !l.on) return;
+    hasSprites = true;
+    const seq = buildSequence(l);
+    spriteFrameIndex[l.id] = ((spriteFrameIndex[l.id] || 0) + 1) % seq.length;
+
+    // Update the sprite img position without full re-render
+    const container = document.getElementById('sprite-' + l.id);
+    if (container) {
+      const inner = container.querySelector('img');
+      if (inner) {
+        const frameInfo = getSpriteFrame(l);
+        const totalWidthPct = frameInfo.frames * 100;
+        inner.src = frameInfo.sheet;
+        inner.style.left = '-' + (frameInfo.offsetPct / 100 * totalWidthPct) + '%';
+      }
+    }
+  });
+  return hasSprites;
+}
+
+function startSpriteAnimation() {
+  if (spriteTimer) return;
+  const fps = LAYERS.find(l => l.type === 'sprite')?.fps || 6;
+  spriteTimer = setInterval(() => {
+    if (!advanceSpriteFrames()) {
+      clearInterval(spriteTimer);
+      spriteTimer = null;
+    }
+  }, 1000 / fps);
+}
+
 // --- Viewport ---
+
+// Stable references for drag — survive re-renders
+let vpSelection = null;
+let vpDragOverlay = null;
+let vpResizeHandle = null;
+let vpLayerEl = null; // the img/div for the selected layer
+let isDragging = false;
+
+function layerStyle(l) {
+  const ox = l.tile ? 0 : (offsets[l.id] || 0); // tiled layers scroll via background-position
+  return 'position:absolute;top:' + l.y + '%;left:' + (l.x + ox) + '%;width:' + l.w + '%;height:' + l.h + '%;';
+}
 
 function renderViewport() {
   const vp = document.getElementById('viewport');
+
+  // During drag, only update positions — don't rebuild DOM
+  if (isDragging && selectedLayer >= 0) {
+    const l = LAYERS[selectedLayer];
+    const ox = offsets[l.id] || 0;
+    const pos = 'top:' + l.y + '%;left:' + (l.x + ox) + '%;width:' + l.w + '%;height:' + l.h + '%;';
+    if (vpLayerEl) {
+      vpLayerEl.style.top = l.y + '%';
+      vpLayerEl.style.left = (l.x + ox) + '%';
+      vpLayerEl.style.width = l.w + '%';
+      vpLayerEl.style.height = l.h + '%';
+    }
+    if (vpSelection) vpSelection.style.cssText = pos;
+    if (vpDragOverlay) vpDragOverlay.style.cssText = pos + 'cursor:grab;pointer-events:auto;z-index:99;';
+    if (vpResizeHandle) vpResizeHandle.style.cssText =
+      'top:calc(' + (l.y + l.h) + '% - 5px);left:calc(' + (l.x + ox + l.w) + '% - 5px);' +
+      'width:10px;height:10px;background:var(--accent2);border-radius:2px;cursor:nwse-resize;z-index:101;pointer-events:auto;position:absolute;';
+    return;
+  }
+
+  // Full rebuild
   vp.innerHTML = '';
+  vpSelection = null;
+  vpDragOverlay = null;
+  vpResizeHandle = null;
+  vpLayerEl = null;
 
   const layersToShow = selectedLayer === -1
     ? [...LAYERS].sort((a, b) => a.depth - b.depth)
@@ -394,14 +504,49 @@ function renderViewport() {
     if (l.type === 'css') {
       const div = document.createElement('div');
       div.className = 'css-layer';
-      div.style.cssText = l.css + ';position:absolute;top:' + l.y + '%;left:' + (l.x + (offsets[l.id] || 0)) + '%;width:' + l.w + '%;height:' + l.h + '%;';
+      div.style.cssText = l.css + ';' + layerStyle(l);
       vp.appendChild(div);
+      if (selectedLayer >= 0 && l.id === LAYERS[selectedLayer].id) vpLayerEl = div;
+    } else if (l.type === 'sprite') {
+      // Animated sprite: div container with inner img offset by current frame
+      const container = document.createElement('div');
+      container.className = 'sprite-layer';
+      container.id = 'sprite-' + l.id;
+      container.style.cssText = layerStyle(l)
+        + (l.blend && selectedLayer === -1 ? 'mix-blend-mode:' + l.blend + ';' : '');
+      const frameInfo = getSpriteFrame(l);
+      const inner = document.createElement('img');
+      inner.src = frameInfo.sheet;
+      // Width = frames * 100% of container, left offset as % of container
+      const totalWidthPct = frameInfo.frames * 100;
+      inner.style.cssText = 'position:absolute;top:0;left:-' + (frameInfo.offsetPct / 100 * totalWidthPct) + '%;'
+        + 'height:100%;width:' + totalWidthPct + '%;image-rendering:pixelated;pointer-events:none;';
+      container.appendChild(inner);
+      vp.appendChild(container);
+      if (selectedLayer >= 0 && l.id === LAYERS[selectedLayer].id) vpLayerEl = container;
+    } else if (l.tile) {
+      // Tiled layer: div with repeating background, scrolls via background-position
+      const div = document.createElement('div');
+      div.id = 'tile-' + l.id;
+      const tileSize = l.tileSize || 25;
+      const bgOx = offsets[l.id] || 0;
+      div.style.cssText = layerStyle(l)
+        + 'background-image:url(' + l.src + ');'
+        + 'background-repeat:repeat;'
+        + 'background-size:' + tileSize + '% auto;'
+        + 'background-position:' + bgOx + '% center;'
+        + 'image-rendering:pixelated;'
+        + (l.blend && selectedLayer === -1 ? 'mix-blend-mode:' + l.blend + ';' : '');
+      vp.appendChild(div);
+      if (selectedLayer >= 0 && l.id === LAYERS[selectedLayer].id) vpLayerEl = div;
     } else {
       const img = document.createElement('img');
       img.src = l.src;
-      img.style.cssText = 'position:absolute;top:' + l.y + '%;left:' + (l.x + (offsets[l.id] || 0)) + '%;width:' + l.w + '%;height:' + l.h + '%;object-fit:cover;image-rendering:pixelated;'
+      const fit = l.fit || 'contain';
+      img.style.cssText = layerStyle(l) + 'object-fit:' + fit + ';image-rendering:pixelated;'
         + (l.blend && selectedLayer === -1 ? 'mix-blend-mode:' + l.blend + ';' : '');
       vp.appendChild(img);
+      if (selectedLayer >= 0 && l.id === LAYERS[selectedLayer].id) vpLayerEl = img;
     }
   });
 
@@ -409,26 +554,24 @@ function renderViewport() {
   if (selectedLayer >= 0) {
     const l = LAYERS[selectedLayer];
     const ox = offsets[l.id] || 0;
+    const pos = 'top:' + l.y + '%;left:' + (l.x + ox) + '%;width:' + l.w + '%;height:' + l.h + '%;';
 
-    // Selection outline
-    const sel = document.createElement('div');
-    sel.className = 'vp-selection';
-    sel.style.cssText = 'top:' + l.y + '%;left:' + (l.x + ox) + '%;width:' + l.w + '%;height:' + l.h + '%;';
-    vp.appendChild(sel);
+    vpSelection = document.createElement('div');
+    vpSelection.className = 'vp-selection';
+    vpSelection.style.cssText = pos;
+    vp.appendChild(vpSelection);
 
-    // Drag overlay for repositioning
-    const drag = document.createElement('div');
-    drag.className = 'vp-drag-overlay';
-    drag.style.cssText = 'top:' + l.y + '%;left:' + (l.x + ox) + '%;width:' + l.w + '%;height:' + l.h + '%;';
-    setupDrag(drag, l);
-    vp.appendChild(drag);
+    vpDragOverlay = document.createElement('div');
+    vpDragOverlay.className = 'vp-drag-overlay';
+    vpDragOverlay.style.cssText = pos;
+    setupDrag(vpDragOverlay, l);
+    vp.appendChild(vpDragOverlay);
 
-    // Resize handle (bottom-right corner)
-    const handle = document.createElement('div');
-    handle.className = 'vp-resize';
-    handle.style.cssText = 'top:calc(' + (l.y + l.h) + '% - 5px);left:calc(' + (l.x + ox + l.w) + '% - 5px);';
-    setupResize(handle, l);
-    vp.appendChild(handle);
+    vpResizeHandle = document.createElement('div');
+    vpResizeHandle.className = 'vp-resize';
+    vpResizeHandle.style.cssText = 'top:calc(' + (l.y + l.h) + '% - 5px);left:calc(' + (l.x + ox + l.w) + '% - 5px);';
+    setupResize(vpResizeHandle, l);
+    vp.appendChild(vpResizeHandle);
   }
 }
 
@@ -444,6 +587,7 @@ function setupDrag(el, layer) {
     startY = pt.clientY;
     startLX = layer.x;
     startLY = layer.y;
+    isDragging = true;
     vp.classList.add('dragging');
 
     function onMove(e2) {
@@ -452,10 +596,11 @@ function setupDrag(el, layer) {
       const dy = ((pt2.clientY - startY) / rect.height) * 100;
       layer.x = Math.round(startLX + dx);
       layer.y = Math.round(startLY + dy);
-      renderViewport();
+      renderViewport(); // fast path — only updates styles
       updateControlValues();
     }
     function onUp() {
+      isDragging = false;
       vp.classList.remove('dragging');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
@@ -484,6 +629,7 @@ function setupResize(el, layer) {
     startY = pt.clientY;
     startW = layer.w;
     startH = layer.h;
+    isDragging = true;
 
     function onMove(e2) {
       const pt2 = e2.touches ? e2.touches[0] : e2;
@@ -491,10 +637,11 @@ function setupResize(el, layer) {
       const dh = ((pt2.clientY - startY) / rect.height) * 100;
       layer.w = Math.max(2, Math.round(startW + dw));
       layer.h = Math.max(2, Math.round(startH + dh));
-      renderViewport();
+      renderViewport(); // fast path — only updates styles
       updateControlValues();
     }
     function onUp() {
+      isDragging = false;
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
       document.removeEventListener('touchmove', onMove);
@@ -541,15 +688,28 @@ function renderControls() {
         <span class="val" id="val-h">${l.h}%</span>
 
         <label>Spd</label>
-        <input type="range" min="0" max="50" value="${l.speed}" id="ctrl-speed" oninput="setLayerProp(${i}, 'speed', +this.value)">
-        <span class="val" id="val-speed">${l.speed}</span>
+        <input type="range" min="-50" max="50" value="${l.speed}" id="ctrl-speed" oninput="setLayerProp(${i}, 'speed', +this.value)">
+        <span class="val" id="val-speed">${speedLabel(l.speed)}</span>
+        <span></span><span style="display:flex;justify-content:space-between;font-size:0.6rem;color:var(--text-muted)"><span>→ right</span><span>left ←</span></span><span></span>
 
         <label>Z</label>
         <input type="range" min="0" max="15" value="${l.depth}" id="ctrl-depth" oninput="setLayerProp(${i}, 'depth', +this.value)">
         <span class="val" id="val-depth">${l.depth}</span>
       </div>
+      ${l.type === 'img' ? `
+      <div style="margin-top:0.4rem;display:flex;align-items:center;gap:0.5rem">
+        <label><input type="checkbox" ${l.tile ? 'checked' : ''} onchange="toggleTile(${i}, this.checked)"> Tile</label>
+        ${l.tile ? `<label style="font-size:0.65rem">Size</label>
+        <input type="range" min="5" max="100" value="${l.tileSize || 25}" style="width:80px" id="ctrl-tileSize" oninput="document.getElementById('val-tileSize').textContent=this.value+'%'" onchange="setLayerProp(${i}, 'tileSize', +this.value)">
+        <span class="val" id="val-tileSize">${l.tileSize || 25}%</span>` : ''}
+      </div>` : ''}
     </div>
   `;
+}
+
+function speedLabel(v) {
+  if (v === 0) return '0';
+  return (v > 0 ? '← ' : '→ ') + Math.abs(v);
 }
 
 function updateControlValues() {
@@ -559,19 +719,32 @@ function updateControlValues() {
     const el = document.getElementById('val-' + id);
     const inp = document.getElementById('ctrl-' + id);
     if (el) el.textContent = v + (suffix || '');
-    if (inp) inp.value = v;
+    if (inp) inp.value = typeof v === 'string' ? parseInt(v) : v;
   };
   setVal('x', l.x, '%');
   setVal('y', l.y, '%');
   setVal('w', l.w, '%');
   setVal('h', l.h, '%');
-  setVal('speed', l.speed, '');
+  const sEl = document.getElementById('val-speed');
+  const sInp = document.getElementById('ctrl-speed');
+  if (sEl) sEl.textContent = speedLabel(l.speed);
+  if (sInp) sInp.value = l.speed;
   setVal('depth', l.depth, '');
+}
+
+function toggleTile(i, on) {
+  LAYERS[i].tile = on;
+  if (on && !LAYERS[i].tileSize) LAYERS[i].tileSize = 25;
+  render();
 }
 
 function setLayerProp(i, prop, val) {
   LAYERS[i][prop] = val;
-  updateControlValues();
+  if (prop === 'tileSize') {
+    renderControls(); // re-render to update tile size display
+  } else {
+    updateControlValues();
+  }
   renderViewport();
 }
 
@@ -609,13 +782,25 @@ function animate(ts) {
   const dt = (ts - lastTime) / 1000;
   lastTime = ts;
 
+  let needsFullRender = false;
   LAYERS.forEach(l => {
-    if (l.speed > 0 && l.on) {
+    if (l.speed !== 0 && l.on) {
       offsets[l.id] = (offsets[l.id] || 0) - l.speed * globalSpeed * dt;
+      if (l.tile) {
+        // Tiled: update background-position directly, no wrap needed
+        const el = document.getElementById('tile-' + l.id);
+        if (el) el.style.backgroundPositionX = offsets[l.id] + '%';
+      } else {
+        // Non-tiled: wrap around
+        const totalX = l.x + offsets[l.id];
+        if (totalX + l.w < 0) offsets[l.id] += (l.w + 100);
+        if (totalX > 100) offsets[l.id] -= (l.w + 100);
+        needsFullRender = true;
+      }
     }
   });
 
-  renderViewport();
+  if (needsFullRender) renderViewport();
   animFrame = requestAnimationFrame(animate);
 }
 
@@ -630,6 +815,7 @@ function render() {
 // Init
 loadState().then(() => {
   render();
+  startSpriteAnimation();
   console.log('[playground] loaded', LAYERS.length, 'layers');
 });
 </script>
